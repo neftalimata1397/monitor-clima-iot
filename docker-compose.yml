@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  monitor-iot:
+    build: .
+    container_name: monitor_clima
+    restart: always
+    privileged: true  # <--- VITAL: Permite a Docker tocar el hardware del Raspberry
+    env_file:
+      - .env
+    volumes:
+      # Mapeamos la memoria GPIO del Raspberry al contenedor
+      - /dev/gpiomem:/dev/gpiomem

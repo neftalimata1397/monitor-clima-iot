@@ -1,3 +1,6 @@
 influxdb-client
-adafruit-circuitpython-dht
-RPI.GPIO
+w1thermsensor
+adafruit-circuitpython-ssd1306
+adafruit-circuitpython-framebuf
+pillow
+rpi.gpio

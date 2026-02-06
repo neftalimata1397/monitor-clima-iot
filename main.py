@@ -1,63 +1,120 @@
-import os
 import time
 import board
-import adafruit_dht
+import busio
+from PIL import Image, ImageDraw, ImageFont
+import adafruit_ssd1306
+from w1thermsensor import W1ThermSensor
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
+import os
 
-# --- CONFIGURACIÓN ---
-INFLUX_URL = os.getenv('INFLUX_URL')
-INFLUX_TOKEN = os.getenv('INFLUX_TOKEN')
-INFLUX_ORG = os.getenv('INFLUX_ORG')
-INFLUX_BUCKET = os.getenv('INFLUX_BUCKET')
-SUCURSAL_ID = os.getenv('SUCURSAL_ID', 'Raspberry_Sin_Nombre')
+# --- 1. CONFIGURACIÓN DE VARIABLES DE ENTORNO ---
+url = os.getenv('INFLUX_URL')
+token = os.getenv('INFLUX_TOKEN')
+org = os.getenv('INFLUX_ORG')
+bucket = os.getenv('INFLUX_BUCKET')
+sucursal_id = os.getenv('SUCURSAL_ID', 'Sucursal_Test')
 
-# --- CONFIGURACIÓN SENSOR (GPIO 4) ---
-# Intentamos inicializar el sensor. Si falla, es porque no está conectado.
-try:
-    sensor = adafruit_dht.DHT22(board.D4)
-    print(f"[INIT] Sensor DHT22 detectado en GPIO 4. Iniciando: {SUCURSAL_ID}")
-except Exception as e:
-    print(f"Error fatal inicializando sensor: {e}")
-    sensor = None
+# --- 2. CONFIGURACIÓN DE PANTALLA OLED (I2C) ---
+# Definir tamaño de pantalla (128x64 es el estándar de tu modelo)
+WIDTH = 128
+HEIGHT = 64
+oled = None
+image = None
+draw = None
+font = None
 
-# --- CLIENTE INFLUXDB ---
-client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
+
+def iniciar_pantalla():
+    global oled, image, draw, font
+    try:
+        # Crear interfaz I2C
+        i2c = busio.I2C(board.SCL, board.SDA)
+        # Crear clase de pantalla
+        oled = adafruit_ssd1306.SSD1306_I2C(WIDTH, HEIGHT, i2c, addr=0x3C)
+
+        # Limpiar pantalla
+        oled.fill(0)
+        oled.show()
+
+        # Crear imagen en blanco para dibujar (Modo '1' es 1-bit color)
+        image = Image.new("1", (oled.width, oled.height))
+        draw = ImageDraw.Draw(image)
+
+        # Cargar fuente por defecto
+        font = ImageFont.load_default()
+        print("✅ Pantalla OLED iniciada correctamente")
+        return True
+    except Exception as e:
+        print(f"⚠️ Advertencia: No se detectó pantalla OLED ({e})")
+        return False
+
+
+# --- 3. CONFIGURACIÓN DEL SENSOR DS18B20 ---
+def leer_sensor():
+    try:
+        sensor = W1ThermSensor()
+        temp_c = sensor.get_temperature()
+        return temp_c
+    except Exception as e:
+        print(f"❌ Error leyendo sensor: {e}")
+        return None
+
+
+# --- 4. INICIALIZACIÓN ---
+client = InfluxDBClient(url=url, token=token, org=org)
 write_api = client.write_api(write_options=SYNCHRONOUS)
 
-print("--- Iniciando Monitoreo Real ---")
+# Intentar iniciar pantalla al arrancar
+tiene_pantalla = iniciar_pantalla()
 
+print(f"🚀 Iniciando monitoreo en: {sucursal_id}")
+
+# --- 5. BUCLE PRINCIPAL ---
 while True:
     try:
-        # Intentar leer sensor
-        temp = sensor.temperature
-        hum = sensor.humidity
+        # A) Leer Temperatura
+        temperatura = leer_sensor()
 
-        # Validar lectura (a veces el sensor da 'None' si falla la lectura)
-        if temp is None or hum is None:
-            print("Lectura fallida... reintentando")
-            time.sleep(2)
-            continue
+        if temperatura is not None:
+            # B) Mostrar en Pantalla (Si existe)
+            if tiene_pantalla:
+                # Borrar lienzo (rectángulo negro)
+                draw.rectangle((0, 0, WIDTH, HEIGHT), outline=0, fill=0)
 
-        # Crear el punto de datos
-        p = Point("clima_site") \
-            .tag("sucursal", SUCURSAL_ID) \
-            .field("temperatura", temp) \
-            .field("humedad", hum)
+                # Dibujar textos
+                draw.text((0, 0), f"SUCURSAL:", font=font, fill=255)
+                draw.text((60, 0), sucursal_id[:10], font=font, fill=255)
 
-        # Enviar a la nube
-        write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p)
-        print(f"[{SUCURSAL_ID}] T: {temp:.1f}°C | H: {hum:.1f}% -> Enviado a InfluxDB")
+                # Temperatura en grande (simulado)
+                draw.text((0, 20), "TEMP ACTUAL:", font=font, fill=255)
+                draw.text((10, 35), f"{temperatura:.2f} C", font=font, fill=255)
 
-    except RuntimeError as error:
-        # Errores comunes de lectura del sensor (es normal que pase a veces)
-        print(f"Error de lectura (reintentando): {error.args[0]}")
-        time.sleep(2.0)
-        continue
-    except Exception as error:
-        print(f"Error general: {error}")
-        sensor.exit()
-        raise error
+                # Estado
+                draw.text((0, 55), "Estado: ENVIANDO...", font=font, fill=255)
+
+                # Actualizar hardware
+                oled.image(image)
+                oled.show()
+
+            # C) Enviar a InfluxDB
+            p = Point("clima_oficina") \
+                .tag("ubicacion", sucursal_id) \
+                .field("temperatura", temperatura)
+
+            write_api.write(bucket=bucket, org=org, record=p)
+            print(f"🌡️ {temperatura}°C enviado a la nube.")
+
+        else:
+            print("⚠️ Sensor desconectado o fallando.")
+            if tiene_pantalla:
+                draw.rectangle((0, 0, WIDTH, HEIGHT), outline=0, fill=0)
+                draw.text((10, 25), "ERROR SENSOR", font=font, fill=255)
+                oled.image(image)
+                oled.show()
+
+    except Exception as e:
+        print(f"🔥 Error crítico en el loop: {e}")
 
     # Esperar 10 segundos antes de la siguiente lectura
     time.sleep(10)

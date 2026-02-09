@@ -1,8 +1,6 @@
 import time
-import board
-import busio
-from PIL import Image, ImageDraw, ImageFont
-import adafruit_ssd1306
+import smbus2
+from RPLCD.i2c import CharLCD
 from w1thermsensor import W1ThermSensor
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
@@ -10,7 +8,8 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 
-# --- 1. CONFIGURACIÓN DE VARIABLES DE ENTORNO ---
+# --- 1. CONFIGURACIÓN ---
+# Variables de InfluxDB
 url = os.getenv('INFLUX_URL')
 token = os.getenv('INFLUX_TOKEN')
 org = os.getenv('INFLUX_ORG')
@@ -24,73 +23,60 @@ EMAIL_TO = os.getenv('EMAIL_DESTINO')
 
 # Configuración de Alertas
 UMBRAL_TEMPERATURA = 26.0
-TIEMPO_COOLDOWN_ALERTA = 1800  # 1800 segundos = 30 minutos (para no spammear)
+TIEMPO_COOLDOWN_ALERTA = 1800  # 30 minutos
 ultimo_envio_alerta = 0
 
-# --- 2. CONFIGURACIÓN DE PANTALLA OLED (I2C) ---
-WIDTH = 128
-HEIGHT = 64
-oled = None
-image = None
-draw = None
-font = None
+# --- 2. CONFIGURACIÓN PANTALLA LCD 20x4 ---
+lcd = None
 
 
-def iniciar_pantalla():
-    global oled, image, draw, font
+def iniciar_lcd():
+    global lcd
     try:
-        i2c = busio.I2C(board.SCL, board.SDA)
-        oled = adafruit_ssd1306.SSD1306_I2C(WIDTH, HEIGHT, i2c, addr=0x3C)
-        oled.fill(0)
-        oled.show()
-        image = Image.new("1", (oled.width, oled.height))
-        draw = ImageDraw.Draw(image)
-        font = ImageFont.load_default()
-        print("✅ Pantalla OLED iniciada")
+        # Dirección común: 0x27. Si no prende, intentar con 0x3F.
+        lcd = CharLCD(i2c_expander='PCF8574', address=0x27, port=1,
+                      cols=20, rows=4, dotsize=8)
+        lcd.clear()
+        print("✅ Pantalla LCD 20x4 iniciada correctamente")
         return True
     except Exception as e:
-        print(f"⚠️ Sin Pantalla: {e}")
+        print(f"⚠️ No se detectó pantalla LCD: {e}")
         return False
 
 
-# --- 3. CONFIGURACIÓN DEL SENSOR DS18B20 ---
+# --- 3. SENSOR ---
 def leer_sensor():
     try:
         sensor = W1ThermSensor()
         return sensor.get_temperature()
     except Exception as e:
-        print(f"❌ Error Sensor: {e}")
+        print(f"❌ Error leyendo sensor: {e}")
         return None
 
 
-# --- 4. FUNCIÓN DE ALERTA DE CORREO ---
+# --- 4. ALERTAS ---
 def enviar_alerta(temp_actual):
     global ultimo_envio_alerta
     ahora = time.time()
 
-    # Si ya mandé correo hace menos de 30 mins, no hago nada
     if (ahora - ultimo_envio_alerta) < TIEMPO_COOLDOWN_ALERTA:
         return
 
     print("⚠️ ALERTA: Temperatura alta. Enviando correo...")
     try:
-        asunto = f"ALERTA: Temperatura Alta en {sucursal_id}"
-        cuerpo = f"ATENCION: La temperatura ha subido a {temp_actual:.1f}°C (Umbral: {UMBRAL_TEMPERATURA}°C).\nFavor de revisar el aire acondicionado."
-
-        msg = MIMEText(cuerpo)
-        msg['Subject'] = asunto
+        msg = MIMEText(f"ATENCION: Temperatura crítica de {temp_actual:.1f}°C en {sucursal_id}.\nFavor de revisar A/C.")
+        msg['Subject'] = f"ALERTA TEMP: {sucursal_id}"
         msg['From'] = EMAIL_USER
         msg['To'] = EMAIL_TO
 
-        # Conectar a Gmail
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(EMAIL_USER, EMAIL_PASS)
         server.send_message(msg)
         server.quit()
 
-        print("📧 Correo enviado exitosamente.")
-        ultimo_envio_alerta = ahora  # Reiniciar cronómetro
+        ultimo_envio_alerta = ahora
+        print("📧 Correo enviado.")
     except Exception as e:
         print(f"❌ Error enviando correo: {e}")
 
@@ -98,8 +84,8 @@ def enviar_alerta(temp_actual):
 # --- 5. INICIALIZACIÓN ---
 client = InfluxDBClient(url=url, token=token, org=org)
 write_api = client.write_api(write_options=SYNCHRONOUS)
-tiene_pantalla = iniciar_pantalla()
 
+tiene_pantalla = iniciar_lcd()
 print(f"🚀 Iniciando monitoreo en: {sucursal_id}")
 
 # --- 6. BUCLE PRINCIPAL ---
@@ -112,34 +98,50 @@ while True:
             if temperatura > UMBRAL_TEMPERATURA:
                 enviar_alerta(temperatura)
 
-            # B) Pantalla
-            if tiene_pantalla:
-                draw.rectangle((0, 0, WIDTH, HEIGHT), outline=0, fill=0)
-                draw.text((0, 0), f"SUCURSAL: {sucursal_id[:9]}", font=font, fill=255)
-                draw.text((0, 15), "TEMP ACTUAL:", font=font, fill=255)
+            # B) Actualizar Pantalla LCD
+            if tiene_pantalla and lcd:
+                try:
+                    # Limpiamos pantalla para evitar textos encimados
+                    lcd.clear()
 
-                # Si está caliente, mostrar ALERTA en pantalla
-                if temperatura > UMBRAL_TEMPERATURA:
-                    draw.text((10, 30), f"{temperatura:.1f} C (ALERTA)", font=font, fill=255)
-                else:
-                    draw.text((10, 30), f"{temperatura:.1f} C", font=font, fill=255)
+                    # Renglón 0: Nombre Sucursal
+                    lcd.cursor_pos = (0, 0)
+                    lcd.write_string(f"SUC: {sucursal_id[:15]}")
 
-                oled.image(image)
-                oled.show()
+                    # Renglón 1: Temperatura
+                    lcd.cursor_pos = (1, 0)
+                    lcd.write_string(f"TEMP: {temperatura:.2f} C")
+
+                    # Renglón 2: Estado Visual
+                    lcd.cursor_pos = (2, 0)
+                    if temperatura > UMBRAL_TEMPERATURA:
+                        lcd.write_string("ESTADO: ALERTA! 🔥")
+                    else:
+                        lcd.write_string("ESTADO: NORMAL OK")
+
+                    # Renglón 3: Indicador de envío
+                    lcd.cursor_pos = (3, 0)
+                    lcd.write_string("Monitoreo Activo...")
+                except Exception as e:
+                    print(f"Error escribiendo en LCD: {e}")
+                    # Intentar reconectar si falla
+                    try:
+                        iniciar_lcd()
+                    except:
+                        pass
 
             # C) Enviar a Nube
             p = Point("clima_oficina").tag("ubicacion", sucursal_id).field("temperatura", temperatura)
             write_api.write(bucket=bucket, org=org, record=p)
-            print(f"🌡️ {temperatura}°C -> Nube")
+            print(f"🌡️ {temperatura}°C enviado.")
 
         else:
-            if tiene_pantalla:
-                draw.rectangle((0, 0, WIDTH, HEIGHT), outline=0, fill=0)
-                draw.text((10, 30), "ERROR SENSOR", font=font, fill=255)
-                oled.image(image)
-                oled.show()
+            if tiene_pantalla and lcd:
+                lcd.clear()
+                lcd.write_string("ERROR DE SENSOR")
 
     except Exception as e:
-        print(f"🔥 Error en loop: {e}")
+        print(f"🔥 Error en loop principal: {e}")
 
+    # Esperar 10 segundos
     time.sleep(10)

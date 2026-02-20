@@ -100,7 +100,7 @@ print(f"🚀 Sistema de monitoreo activo para: {sucursal_id}")
 # --- 6. BUCLE PRINCIPAL ---
 while True:
     #ahora = time.time()
-    ahora_local = datetime.now(ZONA_HORARIA)
+    ahora_local = datetime.now(zona_horaria)
 
     try:
         # A) TAREA CADA 5 SEGUNDOS: LEER SENSOR Y ACTUALIZAR LCD

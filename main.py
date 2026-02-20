@@ -7,10 +7,6 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 import os
 import smtplib
 from email.mime.text import MIMEText
-import locale
-
-# Configurar locale a español (UTF-8)
-locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
 
 # --- 1. CONFIGURACIÓN ---
 url = os.getenv('INFLUX_URL')

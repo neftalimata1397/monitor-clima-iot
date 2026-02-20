@@ -211,8 +211,9 @@ while True:
                         lcd.write_string(f"TEMP: {temp_actual:.2f} C".ljust(20))
 
                         lcd.cursor_pos = (2, 0)
-                        estado = "ALERTA! 🔥" if temp_actual > UMBRAL_TEMPERATURA else "ESTADO: OK"
-                        lcd.write_string(estado.ljust(20))
+                        # Formato exacto de 20 caracteres: "M:xx.x X:xx.x P:xx.x"
+                        stats = f"M:{temp_min:.1f} X:{temp_max:.1f} P:{temp_promedio:.1f}"
+                        lcd.write_string(stats.ljust(20))
 
                         dia_sem = DIAS_SEMANA.get(ahora_local.strftime('%A'), ahora_local.strftime('%A'))
                         hora_str = ahora_local.strftime('%H:%M:%S')

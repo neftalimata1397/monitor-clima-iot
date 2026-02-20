@@ -150,7 +150,7 @@ while True:
 
                 if tiene_pantalla and lcd:
                     try:
-                        lcd.clear()
+                        """lcd.clear()
                         lcd.cursor_pos = (0, 0)
                         lcd.write_string(f"SUC: {sucursal_id[:15]}")
 
@@ -165,7 +165,21 @@ while True:
                         dia_sem = DIAS_SEMANA.get(ahora_local.strftime('%A'), ahora_local.strftime('%A'))
                         hora_str = ahora_local.strftime('%H:%M:%S')
                         lcd.cursor_pos = (3, 0)
-                        lcd.write_string(f"{dia_sem} {hora_str}")
+                        lcd.write_string(f"{dia_sem} {hora_str}")"""
+                        lcd.cursor_pos = (0, 0)
+                        lcd.write_string(f"SUC: {sucursal_id[:15]}".ljust(20))
+
+                        lcd.cursor_pos = (1, 0)
+                        lcd.write_string(f"TEMP: {temp_actual:.2f} C".ljust(20))
+
+                        lcd.cursor_pos = (2, 0)
+                        estado = "ALERTA! 🔥" if temp_actual > UMBRAL_TEMPERATURA else "ESTADO: OK"
+                        lcd.write_string(estado.ljust(20))
+
+                        dia_sem = DIAS_SEMANA.get(ahora_local.strftime('%A'), ahora_local.strftime('%A'))
+                        hora_str = ahora_local.strftime('%H:%M:%S')
+                        lcd.cursor_pos = (3, 0)
+                        lcd.write_string(f"{dia_sem} {hora_str}".ljust(20))
                     except:
                         iniciar_lcd()
             else:

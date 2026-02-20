@@ -23,6 +23,12 @@ sucursal_id = os.getenv('SUCURSAL_ID', 'Sucursal_Test')
 EMAIL_USER = os.getenv('EMAIL_REMITENTE')
 EMAIL_PASS = os.getenv('EMAIL_PASSWORD')
 EMAIL_TO = os.getenv('EMAIL_DESTINO')
+# Variables para estadísticas diarias
+temp_min = None
+temp_max = None
+suma_temps = 0.0
+conteo_temps = 0
+dia_registrado = None
 
 # Configuración de Alertas y Tiempos
 UMBRAL_TEMPERATURA = 26.0
@@ -157,6 +163,25 @@ while True:
             temp_actual = leer_sensor()
 
             if temp_actual is not None:
+                # --- NUEVA LÓGICA DE ESTADÍSTICAS ---
+                dia_actual = ahora_local.date()
+                
+                # Si es un día nuevo (o la primera vez que corre), reiniciamos contadores
+                if dia_registrado != dia_actual:
+                    temp_min = temp_actual
+                    temp_max = temp_actual
+                    suma_temps = 0.0
+                    conteo_temps = 0
+                    dia_registrado = dia_actual
+                
+                # Actualizamos mínimos, máximos y sumamos para el promedio
+                if temp_actual < temp_min: temp_min = temp_actual
+                if temp_actual > temp_max: temp_max = temp_actual
+                
+                suma_temps += temp_actual
+                conteo_temps += 1
+                temp_promedio = suma_temps / conteo_temps
+                # ------------------------------------
                 if temp_actual > UMBRAL_TEMPERATURA:
                     enviar_alerta(temp_actual)
 
@@ -170,8 +195,9 @@ while True:
                         lcd.write_string(f"TEMP: {temp_actual:.2f} C")
 
                         lcd.cursor_pos = (2, 0)
-                        estado = "ALERTA! 🔥" if temp_actual > UMBRAL_TEMPERATURA else "ESTADO: OK"
-                        lcd.write_string(estado)
+                        # Formato exacto de 20 caracteres: "M:xx.x X:xx.x P:xx.x"
+                        stats = f"M:{temp_min:.1f} X:{temp_max:.1f} P:{temp_promedio:.1f}"
+                        lcd.write_string(stats.ljust(20))
 
                         # Renglón 3: Viernes 15:12:59
                         dia_sem = DIAS_SEMANA.get(ahora_local.strftime('%A'), ahora_local.strftime('%A'))

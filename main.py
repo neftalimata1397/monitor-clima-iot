@@ -7,6 +7,10 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 import os
 import smtplib
 from email.mime.text import MIMEText
+import locale
+
+# Configurar locale a español (UTF-8)
+locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
 
 # --- 1. CONFIGURACIÓN ---
 url = os.getenv('INFLUX_URL')
@@ -123,7 +127,7 @@ while True:
                         lcd.write_string(estado)
                         # Renglón 3 - Reloj para confirmar que el sistema no está congelado
                         lcd.cursor_pos = (3, 0)
-                        lcd.write_string(f"ACTUALIZADO: {time.strftime('%H:%M:%S')}")
+                        lcd.write_string(f"{time.strftime('%A %H:%M:%S')}")
                     except:
                         iniciar_lcd()  # Intento de recuperación si se desconecta el bus I2C
             else:

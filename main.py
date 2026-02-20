@@ -1,4 +1,5 @@
 import time
+import threading
 import os
 import smtplib
 import pytz
@@ -9,7 +10,7 @@ import smbus2
 from RPLCD.i2c import CharLCD
 from w1thermsensor import W1ThermSensor
 from influxdb_client import InfluxDBClient, Point
-from influxdb_client.client.write_api import SYNCHRONOUS
+from influxdb_client.client.write_api import ASYNCHRONOUS
 
 # --- 1. CONFIGURACIÓN ---
 url = os.getenv('INFLUX_URL')
@@ -75,15 +76,9 @@ def leer_sensor():
 
 
 # --- 4. ALERTAS (FORMATO REPORTE VISUAL) ---
-def enviar_alerta(temp):
-    global ultimo_envio_alerta
-    ahora = time.time()
-    if (ahora - ultimo_envio_alerta) < TIEMPO_COOLDOWN_ALERTA:
-        return
-
-    ahora_local = datetime.now(ZONA_HORARIA)
-    print("⚠️ ALERTA: Enviando reporte ...")
-
+# --- 4. ALERTAS (CON THREADING) ---
+def _enviar_correo_worker(temp, ahora_local):
+    """Esta función corre en segundo plano para no bloquear el sistema"""
     try:
         msg = MIMEMultipart('alternative')
         msg['Subject'] = f"🚨 ALERTA CRÍTICA: {sucursal_id}"
@@ -121,10 +116,27 @@ def enviar_alerta(temp):
         server.send_message(msg)
         server.quit()
 
-        ultimo_envio_alerta = ahora
-        print("📧 Correo enviado con éxito.")
+        print("📧 Correo enviado con éxito (en segundo plano).")
     except Exception as e:
         print(f"❌ Error enviando correo: {e}")
+
+def enviar_alerta(temp):
+    global ultimo_envio_alerta
+    ahora = time.time()
+    
+    if (ahora - ultimo_envio_alerta) < TIEMPO_COOLDOWN_ALERTA:
+        return
+
+    # Actualizamos el tiempo de inmediato para evitar que el siguiente ciclo 
+    # dispare otro hilo antes de que este termine.
+    ultimo_envio_alerta = ahora 
+    ahora_local = datetime.now(ZONA_HORARIA)
+    
+    print("⚠️ ALERTA: Iniciando hilo para enviar reporte ...")
+    
+    # Creamos e iniciamos el hilo en segundo plano
+    hilo_alerta = threading.Thread(target=_enviar_correo_worker, args=(temp, ahora_local))
+    hilo_alerta.start()
 
 
 # --- 5. INICIALIZACIÓN ---

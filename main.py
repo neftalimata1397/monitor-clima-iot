@@ -122,8 +122,11 @@ while True:
                         estado = "ALERTA! 🔥" if temp_actual > UMBRAL_TEMPERATURA else "ESTADO: OK"
                         lcd.write_string(estado)
                         # Renglón 3 - Reloj para confirmar que el sistema no está congelado
+                        #lcd.cursor_pos = (3, 0)
+                        #lcd.write_string(f"{time.strftime('%A %H:%M:%S')}")
                         lcd.cursor_pos = (3, 0)
-                        lcd.write_string(f"{time.strftime('%A %H:%M:%S')}")
+                        # %a es el nombre del día, %H:%M:%S es la hora
+                        lcd.write_string(f"{time.strftime('%a %H:%M:%S')}")
                     except:
                         iniciar_lcd()  # Intento de recuperación si se desconecta el bus I2C
             else:

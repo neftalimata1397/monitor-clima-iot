@@ -4,6 +4,8 @@ from RPLCD.i2c import CharLCD
 from w1thermsensor import W1ThermSensor
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
+from datetime import datetime
+import pytz
 import os
 import smtplib
 from email.mime.text import MIMEText
@@ -14,6 +16,8 @@ token = os.getenv('INFLUX_TOKEN')
 org = os.getenv('INFLUX_ORG')
 bucket = os.getenv('INFLUX_BUCKET')
 sucursal_id = os.getenv('SUCURSAL_ID', 'Sucursal_Test')
+# Configura tu zona horaria
+zona_horaria = pytz.timezone('America/Monterrey')
 
 # Variables de Correo
 EMAIL_USER = os.getenv('EMAIL_REMITENTE')
@@ -95,7 +99,8 @@ print(f"🚀 Sistema de monitoreo activo para: {sucursal_id}")
 
 # --- 6. BUCLE PRINCIPAL ---
 while True:
-    ahora = time.time()
+    #ahora = time.time()
+    ahora_local = datetime.now(ZONA_HORARIA)
 
     try:
         # A) TAREA CADA 5 SEGUNDOS: LEER SENSOR Y ACTUALIZAR LCD
@@ -124,10 +129,11 @@ while True:
                         # Renglón 3 - Reloj para confirmar que el sistema no está congelado
                         #lcd.cursor_pos = (3, 0)
                         #lcd.write_string(f"{time.strftime('%A %H:%M:%S')}")
-                        lcd.cursor_pos = (3, 0)
+                        #lcd.cursor_pos = (3, 0)
                         # %a es el nombre del día, %H:%M:%S es la hora
                         #lcd.write_string(f"{time.strftime('%a %H:%M:%S')}")
-                        lcd.write_string(f"{time.strftime('%A %H:%M:%S', gmtime())}")
+                        lcd.cursor_pos = (3, 0)
+                        lcd.write_string(f"FECHA: {ahora_local.strftime('%d/%b %H:%M:%S')}")
                     except:
                         iniciar_lcd()  # Intento de recuperación si se desconecta el bus I2C
             else:

@@ -1,14 +1,15 @@
 import time
+import os
+import smtplib
+import pytz
+from datetime import datetime
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import smbus2
 from RPLCD.i2c import CharLCD
 from w1thermsensor import W1ThermSensor
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
-from datetime import datetime
-import pytz
-import os
-import smtplib
-from email.mime.text import MIMEText
 
 # --- 1. CONFIGURACIÓN ---
 url = os.getenv('INFLUX_URL')
@@ -16,26 +17,35 @@ token = os.getenv('INFLUX_TOKEN')
 org = os.getenv('INFLUX_ORG')
 bucket = os.getenv('INFLUX_BUCKET')
 sucursal_id = os.getenv('SUCURSAL_ID', 'Sucursal_Test')
-# Configura tu zona horaria
-zona_horaria = pytz.timezone('America/Monterrey')
 
 # Variables de Correo
 EMAIL_USER = os.getenv('EMAIL_REMITENTE')
 EMAIL_PASS = os.getenv('EMAIL_PASSWORD')
 EMAIL_TO = os.getenv('EMAIL_DESTINO')
 
-# Configuración de Alertas
+# Configuración de Alertas y Tiempos
 UMBRAL_TEMPERATURA = 26.0
-TIEMPO_COOLDOWN_ALERTA = 1800  # 30 minutos
+TIEMPO_COOLDOWN_ALERTA = 1800
 ultimo_envio_alerta = 0
 
-# --- NUEVOS INTERVALOS PARA VENTA (24/7) ---
 INTERVALO_PANTALLA = 5
 INTERVALO_NUBE = 60
 
 ultimo_tiempo_lcd = 0
 ultimo_tiempo_nube = 0
 temp_actual = None
+
+# Configuración de Zona Horaria y Traducción
+ZONA_HORARIA = pytz.timezone('America/Monterrey')
+DIAS_SEMANA = {
+    "Monday": "Lunes",
+    "Tuesday": "Martes",
+    "Wednesday": "Miercoles",
+    "Thursday": "Jueves",
+    "Friday": "Viernes",
+    "Saturday": "Sabado",
+    "Sunday": "Domingo"
+}
 
 # --- 2. CONFIGURACIÓN PANTALLA LCD 20x4 ---
 lcd = None
@@ -64,19 +74,46 @@ def leer_sensor():
         return None
 
 
-# --- 4. ALERTAS ---
+# --- 4. ALERTAS (FORMATO REPORTE VISUAL) ---
 def enviar_alerta(temp):
     global ultimo_envio_alerta
     ahora = time.time()
     if (ahora - ultimo_envio_alerta) < TIEMPO_COOLDOWN_ALERTA:
         return
 
-    print("⚠️ ALERTA: Temperatura alta. Enviando correo...")
+    ahora_local = datetime.now(ZONA_HORARIA)
+    print("⚠️ ALERTA: Enviando reporte ...")
+
     try:
-        msg = MIMEText(f"ATENCION: Temperatura crítica de {temp:.1f}°C en {sucursal_id}.\nFavor de revisar A/C.")
-        msg['Subject'] = f"ALERTA TEMP: {sucursal_id}"
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f"🚨 ALERTA CRÍTICA: {sucursal_id}"
         msg['From'] = EMAIL_USER
         msg['To'] = EMAIL_TO
+
+        html = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; color: #333;">
+            <div style="max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 10px; overflow: hidden;">
+                <div style="background-color: #d9534f; color: white; padding: 20px; text-align: center;">
+                    <h2 style="margin: 0;">Alerta de Temperatura</h2>
+                </div>
+                <div style="padding: 20px; line-height: 1.6;">
+                    <p>Se ha detectado una temperatura fuera de rango en:</p>
+                    <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; text-align: center;">
+                        <span style="font-size: 14px; color: #777;">TEMPERATURA ACTUAL</span><br>
+                        <span style="font-size: 48px; font-weight: bold; color: #d9534f;">{temp:.1f}°C</span>
+                    </div>
+                    <table style="width: 100%; margin-top: 20px; border-collapse: collapse;">
+                        <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Sucursal:</strong></td><td>{sucursal_id}</td></tr>
+                        <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Umbral:</strong></td><td>{UMBRAL_TEMPERATURA}°C</td></tr>
+                        <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Hora:</strong></td><td>{ahora_local.strftime('%H:%M:%S')}</td></tr>
+                    </table>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        msg.attach(MIMEText(html, 'html'))
 
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
@@ -85,7 +122,7 @@ def enviar_alerta(temp):
         server.quit()
 
         ultimo_envio_alerta = ahora
-        print("📧 Correo enviado.")
+        print("📧 Correo enviado con éxito.")
     except Exception as e:
         print(f"❌ Error enviando correo: {e}")
 
@@ -95,70 +132,63 @@ client = InfluxDBClient(url=url, token=token, org=org)
 write_api = client.write_api(write_options=SYNCHRONOUS)
 
 tiene_pantalla = iniciar_lcd()
-print(f"🚀 Sistema de monitoreo activo para: {sucursal_id}")
+print(f"🚀 Sistema activo para: {sucursal_id}")
 
 # --- 6. BUCLE PRINCIPAL ---
 while True:
-    #ahora = time.time()
-    ahora_local = datetime.now(zona_horaria)
+    ahora_unix = time.time()
+    ahora_local = datetime.now(ZONA_HORARIA)
 
     try:
-        # A) TAREA CADA 5 SEGUNDOS: LEER SENSOR Y ACTUALIZAR LCD
-        if ahora - ultimo_tiempo_lcd >= INTERVALO_PANTALLA:
+        # A) CADA 5 SEGUNDOS: SENSOR Y LCD
+        if ahora_unix - ultimo_tiempo_lcd >= INTERVALO_PANTALLA:
             temp_actual = leer_sensor()
 
             if temp_actual is not None:
-                # Checar Alertas
                 if temp_actual > UMBRAL_TEMPERATURA:
                     enviar_alerta(temp_actual)
 
-                # Actualizar Pantalla
                 if tiene_pantalla and lcd:
                     try:
                         lcd.clear()
-                        # Renglón 0
                         lcd.cursor_pos = (0, 0)
                         lcd.write_string(f"SUC: {sucursal_id[:15]}")
-                        # Renglón 1
+
                         lcd.cursor_pos = (1, 0)
                         lcd.write_string(f"TEMP: {temp_actual:.2f} C")
-                        # Renglón 2
+
                         lcd.cursor_pos = (2, 0)
                         estado = "ALERTA! 🔥" if temp_actual > UMBRAL_TEMPERATURA else "ESTADO: OK"
                         lcd.write_string(estado)
-                        # Renglón 3 - Reloj para confirmar que el sistema no está congelado
-                        #lcd.cursor_pos = (3, 0)
-                        #lcd.write_string(f"{time.strftime('%A %H:%M:%S')}")
-                        #lcd.cursor_pos = (3, 0)
-                        # %a es el nombre del día, %H:%M:%S es la hora
-                        #lcd.write_string(f"{time.strftime('%a %H:%M:%S')}")
+
+                        # Renglón 3: Viernes 15:12:59
+                        dia_sem = DIAS_SEMANA.get(ahora_local.strftime('%A'), ahora_local.strftime('%A'))
+                        hora_str = ahora_local.strftime('%H:%M:%S')
                         lcd.cursor_pos = (3, 0)
-                        lcd.write_string(f"FECHA: {ahora_local.strftime('%d/%b %H:%M:%S')}")
+                        lcd.write_string(f"{dia_sem} {hora_str}")
                     except:
-                        iniciar_lcd()  # Intento de recuperación si se desconecta el bus I2C
+                        iniciar_lcd()
             else:
                 if tiene_pantalla:
                     lcd.clear()
                     lcd.write_string("ERROR DE SENSOR")
 
-            ultimo_tiempo_lcd = ahora
+            ultimo_tiempo_lcd = ahora_unix
 
-        # B) TAREA CADA 60 SEGUNDOS: ENVIAR A INFLUXDB
-        if ahora - ultimo_tiempo_nube >= INTERVALO_NUBE:
+        # B) CADA 60 SEGUNDOS: INFLUXDB
+        if ahora_unix - ultimo_tiempo_nube >= INTERVALO_NUBE:
             if temp_actual is not None:
                 try:
                     p = Point("clima_oficina").tag("ubicacion", sucursal_id).field("temperatura", temp_actual)
                     write_api.write(bucket=bucket, org=org, record=p)
-                    print(f"☁️ [{time.strftime('%H:%M:%S')}] Dato enviado a InfluxDB: {temp_actual}°C")
-                    ultimo_tiempo_nube = ahora
+                    print(f"☁️ [{ahora_local.strftime('%H:%M:%S')}] Enviado a InfluxDB: {temp_actual}°C")
+                    ultimo_tiempo_nube = ahora_unix
                 except Exception as e:
-                    print(f"❌ Error al conectar con InfluxDB: {e}")
+                    print(f"❌ Error InfluxDB: {e}")
             else:
-                print("⚠️ No hay lectura válida para enviar a la nube.")
-                # Reintentamos en 10 segundos si falló por falta de lectura
-                ultimo_tiempo_nube = ahora - 50
+                ultimo_tiempo_nube = ahora_unix - 50  # Reintento pronto si no hubo lectura
 
     except Exception as e:
-        print(f"🔥 Error crítico en loop: {e}")
+        print(f"🔥 Error: {e}")
 
     time.sleep(1)

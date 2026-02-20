@@ -3,3 +3,4 @@ w1thermsensor
 RPLCD
 smbus2
 rpi.gpio
+pytz

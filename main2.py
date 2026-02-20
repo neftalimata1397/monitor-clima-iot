@@ -1,88 +1,155 @@
-import os
 import time
-import random
+import smbus2
+from RPLCD.i2c import CharLCD
+from w1thermsensor import W1ThermSensor
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
+import os
+import smtplib
+from email.mime.text import MIMEText
 
-# --- CONFIGURACIÓN ---
-INFLUX_URL = os.getenv('INFLUX_URL')
-INFLUX_TOKEN = os.getenv('INFLUX_TOKEN')
-INFLUX_ORG = os.getenv('INFLUX_ORG')
-INFLUX_BUCKET = os.getenv('INFLUX_BUCKET')
-SUCURSAL_ID = os.getenv('SUCURSAL_ID', 'Desconocido')
-SENSOR_PIN_NUM = int(os.getenv('SENSOR_PIN', '4'))
+# --- 1. CONFIGURACIÓN ---
+url = os.getenv('INFLUX_URL')
+token = os.getenv('INFLUX_TOKEN')
+org = os.getenv('INFLUX_ORG')
+bucket = os.getenv('INFLUX_BUCKET')
+sucursal_id = os.getenv('SUCURSAL_ID', 'Sucursal_Test')
 
-# --- SENSOR: MODO REAL VS SIMULADO ---
-sensor = None
-is_simulated = False
+# Variables de Correo
+EMAIL_USER = os.getenv('EMAIL_REMITENTE')
+EMAIL_PASS = os.getenv('EMAIL_PASSWORD')
+EMAIL_TO = os.getenv('EMAIL_DESTINO')
 
-try:
-    # Intenta cargar librerías de hardware (Solo existen en Raspberry)
-    import board
-    import adafruit_dht
+# Configuración de Alertas
+UMBRAL_TEMPERATURA = 26.0
+TIEMPO_COOLDOWN_ALERTA = 1800  # 30 minutos
+ultimo_envio_alerta = 0
 
-    # Mapeo de pines (GPIO 4 -> D4)
-    if SENSOR_PIN_NUM == 4:
-        sensor = adafruit_dht.DHT22(board.D4)
-        print(f"[INIT] Hardware DHT22 detectado en GPIO {SENSOR_PIN_NUM}")
-    else:
-        # Puedes agregar mas pines aquí si usas otro
-        sensor = adafruit_dht.DHT22(board.D4)
+# --- NUEVOS INTERVALOS PARA VENTA (24/7) ---
+INTERVALO_PANTALLA = 5  # Actualizar LCD y leer sensor cada 5 segundos
+INTERVALO_NUBE = 60  # Enviar a InfluxDB cada 60 segundos
 
-except Exception as e:
-    print(f"[WARN] No se detectó hardware ({e}). Usando MODO SIMULACIÓN.")
-    is_simulated = True
+ultimo_tiempo_lcd = 0
+ultimo_tiempo_nube = 0
+temp_actual = None  # Almacena la última lectura para el envío a la nube
 
-# --- CONEXIÓN INFLUXDB ---
-client = None
-write_api = None
+# --- 2. CONFIGURACIÓN PANTALLA LCD 20x4 ---
+lcd = None
 
-try:
-    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
-    write_api = client.write_api(write_options=SYNCHRONOUS)
-    print("[INIT] Conexión a Nube configurada.")
-except Exception as e:
-    print(f"[ERROR] InfluxDB: {e}")
 
-# --- BUCLE PRINCIPAL ---
-print(f"--- Iniciando Monitor: {SUCURSAL_ID} ---")
-
-while True:
+def iniciar_lcd():
+    global lcd
     try:
-        temp = 0.0
-        hum = 0.0
+        lcd = CharLCD(i2c_expander='PCF8574', address=0x27, port=1,
+                      cols=20, rows=4, dotsize=8)
+        lcd.clear()
+        print("✅ Pantalla LCD 20x4 iniciada correctamente")
+        return True
+    except Exception as e:
+        print(f"⚠️ No se detectó pantalla LCD: {e}")
+        return False
 
-        if is_simulated:
-            # Generar datos falsos
-            temp = round(random.uniform(20.0, 30.0), 1)
-            hum = round(random.uniform(40.0, 60.0), 1)
-        else:
-            # Leer sensor real
-            try:
-                temp = sensor.temperature
-                hum = sensor.humidity
-                if temp is None or hum is None:
-                    raise RuntimeError("Lectura Nula")
-            except RuntimeError as error:
-                print(f"[SENSOR] Reintentando... ({error.args[0]})")
-                time.sleep(2.0)
-                continue
 
-        # Log Local
-        print(f"[{SUCURSAL_ID}] T: {temp}°C | H: {hum}%")
+# --- 3. SENSOR ---
+def leer_sensor():
+    try:
+        sensor = W1ThermSensor()
+        return sensor.get_temperature()
+    except Exception as e:
+        print(f"❌ Error leyendo sensor: {e}")
+        return None
 
-        # Enviar a Nube
-        if write_api:
-            p = Point("clima_site") \
-                .tag("sucursal", SUCURSAL_ID) \
-                .field("temperatura", temp) \
-                .field("humedad", hum)
-            write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p)
-            print(" -> Enviado OK")
+
+# --- 4. ALERTAS ---
+def enviar_alerta(temp):
+    global ultimo_envio_alerta
+    ahora = time.time()
+    if (ahora - ultimo_envio_alerta) < TIEMPO_COOLDOWN_ALERTA:
+        return
+
+    print("⚠️ ALERTA: Temperatura alta. Enviando correo...")
+    try:
+        msg = MIMEText(f"ATENCION: Temperatura crítica de {temp:.1f}°C en {sucursal_id}.\nFavor de revisar A/C.")
+        msg['Subject'] = f"ALERTA TEMP: {sucursal_id}"
+        msg['From'] = EMAIL_USER
+        msg['To'] = EMAIL_TO
+
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.send_message(msg)
+        server.quit()
+
+        ultimo_envio_alerta = ahora
+        print("📧 Correo enviado.")
+    except Exception as e:
+        print(f"❌ Error enviando correo: {e}")
+
+
+# --- 5. INICIALIZACIÓN ---
+client = InfluxDBClient(url=url, token=token, org=org)
+write_api = client.write_api(write_options=SYNCHRONOUS)
+
+tiene_pantalla = iniciar_lcd()
+print(f"🚀 Sistema de monitoreo activo para: {sucursal_id}")
+
+# --- 6. BUCLE PRINCIPAL (NON-BLOCKING) ---
+while True:
+    ahora = time.time()
+
+    try:
+        # A) TAREA CADA 5 SEGUNDOS: LEER SENSOR Y ACTUALIZAR LCD
+        if ahora - ultimo_tiempo_lcd >= INTERVALO_PANTALLA:
+            temp_actual = leer_sensor()
+
+            if temp_actual is not None:
+                # Checar Alertas
+                if temp_actual > UMBRAL_TEMPERATURA:
+                    enviar_alerta(temp_actual)
+
+                # Actualizar Pantalla
+                if tiene_pantalla and lcd:
+                    try:
+                        lcd.clear()
+                        # Renglón 0
+                        lcd.cursor_pos = (0, 0)
+                        lcd.write_string(f"SUC: {sucursal_id[:15]}")
+                        # Renglón 1
+                        lcd.cursor_pos = (1, 0)
+                        lcd.write_string(f"TEMP: {temp_actual:.2f} C")
+                        # Renglón 2
+                        lcd.cursor_pos = (2, 0)
+                        estado = "ALERTA! 🔥" if temp_actual > UMBRAL_TEMPERATURA else "ESTADO: OK"
+                        lcd.write_string(estado)
+                        # Renglón 3 - Reloj para confirmar que el sistema no está congelado
+                        lcd.cursor_pos = (3, 0)
+                        lcd.write_string(f"ACTUALIZADO: {time.strftime('%H:%M:%S')}")
+                    except:
+                        iniciar_lcd()  # Intento de recuperación si se desconecta el bus I2C
+            else:
+                if tiene_pantalla:
+                    lcd.clear()
+                    lcd.write_string("ERROR DE SENSOR")
+
+            ultimo_tiempo_lcd = ahora
+
+        # B) TAREA CADA 60 SEGUNDOS: ENVIAR A INFLUXDB
+        if ahora - ultimo_tiempo_nube >= INTERVALO_NUBE:
+            if temp_actual is not None:
+                try:
+                    p = Point("clima_oficina").tag("ubicacion", sucursal_id).field("temperatura", temp_actual)
+                    write_api.write(bucket=bucket, org=org, record=p)
+                    print(f"☁️ [{time.strftime('%H:%M:%S')}] Dato enviado a InfluxDB: {temp_actual}°C")
+                    ultimo_tiempo_nube = ahora
+                except Exception as e:
+                    print(f"❌ Error al conectar con InfluxDB: {e}")
+            else:
+                print("⚠️ No hay lectura válida para enviar a la nube.")
+                # Reintentamos en 10 segundos si falló por falta de lectura
+                ultimo_tiempo_nube = ahora - 50
 
     except Exception as e:
-        print(f"[ERROR] {e}")
-        if not is_simulated:
-            time.sleep(1)
+        print(f"🔥 Error crítico en loop: {e}")
 
-    time.sleep(10)  # Envia cada 10 segundos
+    # Pausa ligera para no estresar la CPU (1 segundo es perfecto para precisión)
+    time.sleep(1)

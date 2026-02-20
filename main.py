@@ -9,7 +9,6 @@ import smtplib
 from email.mime.text import MIMEText
 
 # --- 1. CONFIGURACIÓN ---
-# Variables de InfluxDB
 url = os.getenv('INFLUX_URL')
 token = os.getenv('INFLUX_TOKEN')
 org = os.getenv('INFLUX_ORG')
@@ -26,6 +25,14 @@ UMBRAL_TEMPERATURA = 26.0
 TIEMPO_COOLDOWN_ALERTA = 1800  # 30 minutos
 ultimo_envio_alerta = 0
 
+# --- NUEVOS INTERVALOS PARA VENTA (24/7) ---
+INTERVALO_PANTALLA = 5
+INTERVALO_NUBE = 60
+
+ultimo_tiempo_lcd = 0
+ultimo_tiempo_nube = 0
+temp_actual = None
+
 # --- 2. CONFIGURACIÓN PANTALLA LCD 20x4 ---
 lcd = None
 
@@ -33,7 +40,6 @@ lcd = None
 def iniciar_lcd():
     global lcd
     try:
-        # Dirección común: 0x27. Si no prende, intentar con 0x3F.
         lcd = CharLCD(i2c_expander='PCF8574', address=0x27, port=1,
                       cols=20, rows=4, dotsize=8)
         lcd.clear()
@@ -55,16 +61,15 @@ def leer_sensor():
 
 
 # --- 4. ALERTAS ---
-def enviar_alerta(temp_actual):
+def enviar_alerta(temp):
     global ultimo_envio_alerta
     ahora = time.time()
-
     if (ahora - ultimo_envio_alerta) < TIEMPO_COOLDOWN_ALERTA:
         return
 
     print("⚠️ ALERTA: Temperatura alta. Enviando correo...")
     try:
-        msg = MIMEText(f"ATENCION: Temperatura crítica de {temp_actual:.1f}°C en {sucursal_id}.\nFavor de revisar A/C.")
+        msg = MIMEText(f"ATENCION: Temperatura crítica de {temp:.1f}°C en {sucursal_id}.\nFavor de revisar A/C.")
         msg['Subject'] = f"ALERTA TEMP: {sucursal_id}"
         msg['From'] = EMAIL_USER
         msg['To'] = EMAIL_TO
@@ -86,62 +91,64 @@ client = InfluxDBClient(url=url, token=token, org=org)
 write_api = client.write_api(write_options=SYNCHRONOUS)
 
 tiene_pantalla = iniciar_lcd()
-print(f"🚀 Iniciando monitoreo en: {sucursal_id}")
+print(f"🚀 Sistema de monitoreo activo para: {sucursal_id}")
 
 # --- 6. BUCLE PRINCIPAL ---
 while True:
+    ahora = time.time()
+
     try:
-        temperatura = leer_sensor()
+        # A) TAREA CADA 5 SEGUNDOS: LEER SENSOR Y ACTUALIZAR LCD
+        if ahora - ultimo_tiempo_lcd >= INTERVALO_PANTALLA:
+            temp_actual = leer_sensor()
 
-        if temperatura is not None:
-            # A) Checar Alertas
-            if temperatura > UMBRAL_TEMPERATURA:
-                enviar_alerta(temperatura)
+            if temp_actual is not None:
+                # Checar Alertas
+                if temp_actual > UMBRAL_TEMPERATURA:
+                    enviar_alerta(temp_actual)
 
-            # B) Actualizar Pantalla LCD
-            if tiene_pantalla and lcd:
-                try:
-                    # Limpiamos pantalla para evitar textos encimados
-                    lcd.clear()
-
-                    # Renglón 0: Nombre Sucursal
-                    lcd.cursor_pos = (0, 0)
-                    lcd.write_string(f"SUC: {sucursal_id[:15]}")
-
-                    # Renglón 1: Temperatura
-                    lcd.cursor_pos = (1, 0)
-                    lcd.write_string(f"TEMP: {temperatura:.2f} C")
-
-                    # Renglón 2: Estado Visual
-                    lcd.cursor_pos = (2, 0)
-                    if temperatura > UMBRAL_TEMPERATURA:
-                        lcd.write_string("ESTADO: ALERTA! 🔥")
-                    else:
-                        lcd.write_string("ESTADO: NORMAL OK")
-
-                    # Renglón 3: Indicador de envío
-                    lcd.cursor_pos = (3, 0)
-                    lcd.write_string("Monitoreo Activo...")
-                except Exception as e:
-                    print(f"Error escribiendo en LCD: {e}")
-                    # Intentar reconectar si falla
+                # Actualizar Pantalla
+                if tiene_pantalla and lcd:
                     try:
-                        iniciar_lcd()
+                        lcd.clear()
+                        # Renglón 0
+                        lcd.cursor_pos = (0, 0)
+                        lcd.write_string(f"SUC: {sucursal_id[:15]}")
+                        # Renglón 1
+                        lcd.cursor_pos = (1, 0)
+                        lcd.write_string(f"TEMP: {temp_actual:.2f} C")
+                        # Renglón 2
+                        lcd.cursor_pos = (2, 0)
+                        estado = "ALERTA! 🔥" if temp_actual > UMBRAL_TEMPERATURA else "ESTADO: OK"
+                        lcd.write_string(estado)
+                        # Renglón 3 - Reloj para confirmar que el sistema no está congelado
+                        lcd.cursor_pos = (3, 0)
+                        lcd.write_string(f"ACTUALIZADO: {time.strftime('%H:%M:%S')}")
                     except:
-                        pass
+                        iniciar_lcd()  # Intento de recuperación si se desconecta el bus I2C
+            else:
+                if tiene_pantalla:
+                    lcd.clear()
+                    lcd.write_string("ERROR DE SENSOR")
 
-            # C) Enviar a Nube
-            p = Point("clima_oficina").tag("ubicacion", sucursal_id).field("temperatura", temperatura)
-            write_api.write(bucket=bucket, org=org, record=p)
-            print(f"🌡️ {temperatura}°C enviado.")
+            ultimo_tiempo_lcd = ahora
 
-        else:
-            if tiene_pantalla and lcd:
-                lcd.clear()
-                lcd.write_string("ERROR DE SENSOR")
+        # B) TAREA CADA 60 SEGUNDOS: ENVIAR A INFLUXDB
+        if ahora - ultimo_tiempo_nube >= INTERVALO_NUBE:
+            if temp_actual is not None:
+                try:
+                    p = Point("clima_oficina").tag("ubicacion", sucursal_id).field("temperatura", temp_actual)
+                    write_api.write(bucket=bucket, org=org, record=p)
+                    print(f"☁️ [{time.strftime('%H:%M:%S')}] Dato enviado a InfluxDB: {temp_actual}°C")
+                    ultimo_tiempo_nube = ahora
+                except Exception as e:
+                    print(f"❌ Error al conectar con InfluxDB: {e}")
+            else:
+                print("⚠️ No hay lectura válida para enviar a la nube.")
+                # Reintentamos en 10 segundos si falló por falta de lectura
+                ultimo_tiempo_nube = ahora - 50
 
     except Exception as e:
-        print(f"🔥 Error en loop principal: {e}")
+        print(f"🔥 Error crítico en loop: {e}")
 
-    # Esperar 10 segundos
-    time.sleep(10)
+    time.sleep(1)

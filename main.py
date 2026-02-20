@@ -141,7 +141,7 @@ def enviar_alerta(temp):
 
 # --- 5. INICIALIZACIÓN ---
 client = InfluxDBClient(url=url, token=token, org=org)
-write_api = client.write_api(write_options=SYNCHRONOUS)
+write_api = client.write_api(write_options=ASYNCHRONOUS)
 
 tiene_pantalla = iniciar_lcd()
 print(f"🚀 Sistema activo para: {sucursal_id}")

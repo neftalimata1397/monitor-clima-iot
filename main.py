@@ -127,7 +127,7 @@ while True:
                         lcd.cursor_pos = (3, 0)
                         # %a es el nombre del día, %H:%M:%S es la hora
                         #lcd.write_string(f"{time.strftime('%a %H:%M:%S')}")
-                        lcd.write_string(f"{time.strftime('%d/%b %H:%M:%S')}")
+                        lcd.write_string(f"{time.strftime('%a/%b %H:%M:%S')}")
                     except:
                         iniciar_lcd()  # Intento de recuperación si se desconecta el bus I2C
             else:

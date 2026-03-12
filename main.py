@@ -205,7 +205,7 @@ while True:
                         lcd.cursor_pos = (3, 0)
                         lcd.write_string(f"{dia_sem} {hora_str}")"""
                         lcd.cursor_pos = (0, 0)
-                        lcd.write_string(f"SUC: {sucursal_id[:15]}".ljust(20))
+                        lcd.write_string(f"CR: {sucursal_id[:15]}".ljust(20))
 
                         lcd.cursor_pos = (1, 0)
                         lcd.write_string(f"TEMP: {temp_actual:.2f} C".ljust(20))

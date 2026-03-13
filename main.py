@@ -150,6 +150,12 @@ client = InfluxDBClient(url=url, token=token, org=org)
 write_api = client.write_api(write_options=ASYNCHRONOUS)
 
 tiene_pantalla = iniciar_lcd()
+# Texto para el scroll de la pantalla
+texto_sucursal = f"CR: {sucursal_id}"
+necesita_scroll = len(texto_sucursal) > 20
+if necesita_scroll:
+    texto_sucursal += "   *** " 
+posicion_scroll = 0
 print(f"🚀 Sistema activo para: {sucursal_id}")
 
 # --- 6. BUCLE PRINCIPAL ---
@@ -205,7 +211,15 @@ while True:
                         lcd.cursor_pos = (3, 0)
                         lcd.write_string(f"{dia_sem} {hora_str}")"""
                         lcd.cursor_pos = (0, 0)
-                        lcd.write_string(f"CR: {sucursal_id[:15]}".ljust(20))
+                        #lcd.write_string(f"CR: {sucursal_id[:15]}".ljust(20))
+                        if necesita_scroll:
+                            texto_doble = texto_sucursal * 2
+                            mostrar = texto_doble[posicion_scroll : posicion_scroll + 20]
+                            posicion_scroll = (posicion_scroll + 1) % len(texto_sucursal)
+                        else:
+                            mostrar = texto_sucursal
+                        lcd.write_string(mostrar.ljust(20))
+                        #lcd.write_string(f"CR: {sucursal_id[:15]}".ljust(20))
 
                         lcd.cursor_pos = (1, 0)
                         lcd.write_string(f"TEMP: {temp_actual:.2f} C".ljust(20))

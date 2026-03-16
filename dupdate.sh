@@ -1,53 +1,54 @@
 #!/bin/bash
 
+# This automatically changes the directory to wherever this script is located
+cd "$(dirname "$0")" || exit 1
+
 declare -a active_containers
 declare -a active_images
+
 function validateContainers(){
-	readarray -t active_containers < <(docker ps -a | awk 'NR > 1 { print $1 }')
+	# Uses Docker's native -q flag to grab ONLY the container IDs
+	readarray -t active_containers < <(docker ps -aq)
 	[[ ${#active_containers[@]} -eq 0 ]] && { echo "No hay contenedores"; return 1 ; }
-#	echo ${active_containers}
 	return 0
 }
 
 function validateImages(){
-	readarray -t active_images < <(docker images | awk 'NR > 1 { print $2 }')
+	# Uses Docker's native -q flag to grab ONLY the image IDs
+	readarray -t active_images < <(docker images -q)
 	[[ ${#active_images[@]} -eq 0 ]] && { echo "No hay imagenes"; return 1 ; }
-#	echo ${active_images}
-#	echo ${active_images}
 	return 0
 }
 
 function remove_containers(){
-for container in ${active_containers[@]};do
-	if ! docker rm -f "$container";then
-		echo "Failed to remove container $container"
+	# We can pass the array directly to docker rm instead of looping
+	if ! docker rm -f "${active_containers[@]}"; then
+		echo "Failed to remove containers"
 		return 1
 	fi
-done
-echo "Containers removed succeslfully"
-unset active_containers
-return 0
+	echo "Containers removed successfully"
+	unset active_containers
+	return 0
 }
 
 function remove_images(){
-for image in ${active_images[@]};do
-	if ! docker rmi -f "$image";then
-		echo "Failed to remove image $image"
+	# We can pass the array directly to docker rmi instead of looping
+	if ! docker rmi -f "${active_images[@]}"; then
+		echo "Failed to remove images"
 		return 1
 	fi
-done
-echo "Images removed successfully"
-unset active_images
-return 0
+	echo "Images removed successfully"
+	unset active_images
+	return 0
 }
 
 function composer(){
-	if ! docker compose up -d --build;then 
+	if ! docker compose up -d --build; then 
 		echo "No se pudo ejecutar el compose"
 		return 1
 	fi
 	echo "Docker corriendo"
-return 0
+	return 0
 }
 
 if validateContainers; then

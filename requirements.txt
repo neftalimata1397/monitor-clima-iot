@@ -4,3 +4,4 @@ RPLCD
 smbus2
 rpi.gpio
 pytz
+python-dotenv

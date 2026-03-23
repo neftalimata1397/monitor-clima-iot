@@ -11,6 +11,7 @@ from RPLCD.i2c import CharLCD
 from w1thermsensor import W1ThermSensor
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import ASYNCHRONOUS
+from dotenv import load_dotenv
 
 # --- 1. CONFIGURACIÓN ---
 url = os.getenv('INFLUX_URL')
@@ -20,6 +21,7 @@ bucket = os.getenv('INFLUX_BUCKET')
 sucursal_id = os.getenv('SUCURSAL_ID', 'Sucursal_Test')
 
 # Variables de Correo
+load_dotenv()
 EMAIL_USER = os.getenv('EMAIL_REMITENTE')
 EMAIL_PASS = os.getenv('EMAIL_PASSWORD')
 EMAIL_TO = os.getenv('EMAIL_DESTINO')
@@ -116,8 +118,8 @@ def _enviar_correo_worker(temp, ahora_local):
         """
         msg.attach(MIMEText(html, 'html'))
 
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
+        server = smtplib.SMTP('smtp.zoho.com', 587) 
+        server.starttls() # Cifrado obligatorio
         server.login(EMAIL_USER, EMAIL_PASS)
         server.send_message(msg)
         server.quit()
